@@ -1,0 +1,439 @@
+/** 
+ * Model: Predator-Prey with Apex Predator and Disease Dynamics 
+ * Description: Simulation of prey, predator, and apex predator dynamics with disease spread.
+ */
+
+model prey_predator_apex
+
+global {
+    // --- Initial Population Parameters ---
+    int nb_preys_init <- 200;
+    int nb_predators_init <- 20;
+    int nb_apex_predators_init <- 10; // Initial number of apex predators
+
+    // --- Energy Parameters ---
+    // Prey Parameters
+    float prey_max_energy <- 1.0;
+    float prey_max_transfer <- 0.1;
+    float prey_energy_consum <- 0.05;
+    float prey_proba_reproduce <- 0.03; // Increased from 0.01
+    int prey_nb_max_offsprings <- 6;    // Increased from 5
+    float prey_energy_reproduce <- 0.4; // Decreased from 0.5
+
+    // Predator Parameters
+    float predator_max_energy <- 1.0;
+    float predator_energy_transfer <- 0.7; // Increased from 0.5
+    float predator_energy_consum <- 0.02;
+    float predator_proba_reproduce <- 0.015; // Increased from 0.01
+    int predator_nb_max_offsprings <- 3;
+    float predator_energy_reproduce <- 0.6; // Increased from 0.5
+
+    // Apex Predator Parameters
+    float apex_predator_max_energy <- 1.5;
+    float apex_predator_energy_transfer <- 0.7;
+    float apex_predator_energy_consum <- 0.06; // Increased from 0.03
+    float apex_predator_proba_reproduce <- 0.002;
+    int apex_predator_nb_max_offsprings <- 2;
+    float apex_predator_energy_reproduce <- 1.0;
+
+    // --- Disease Parameters ---
+    float disease_transmission_rate <- 0.2; // Probability of transmission upon contact
+    float disease_mortality_rate <- 0.05;   // Probability of death per time step
+    float disease_recovery_rate <- 0.1;     // Probability of recovery per time step
+    float initial_infection_rate <- 0.01;   // Initial proportion of infected agents
+
+    // Susceptibility Factors
+    float prey_susceptibility <- 1.0;
+    float predator_susceptibility <- 1.0;
+    float apex_predator_susceptibility <- 1.0;
+
+    // --- Population Tracking ---
+    int nb_preys -> {length(prey)};
+    int nb_predators -> {length(predator)};
+    int nb_apex_predators -> {length(apex_predator)};
+    
+    // --- Disease Tracking ---
+    int nb_infected_preys -> {prey count (each.health_state = "infected")};
+    int nb_infected_predators -> {predator count (each.health_state = "infected")};
+    int nb_infected_apex_predators -> {apex_predator count (each.health_state = "infected")};
+
+    init {
+        // Create Preys with initial infections
+        create prey number: nb_preys_init {
+            if (rnd(0.0, 1.0) < initial_infection_rate) {
+                health_state <- "infected";
+            }
+        }
+
+        // Create Predators with initial infections
+        create predator number: nb_predators_init {
+            if (rnd(0.0, 1.0) < initial_infection_rate) {
+                health_state <- "infected";
+            }
+        }
+
+        // Create Apex Predators with initial infections
+        create apex_predator number: nb_apex_predators_init {
+            if (rnd(0.0, 1.0) < initial_infection_rate) {
+                health_state <- "infected";
+            }
+        }
+    }
+    
+    reflex save_result when: (nb_preys > 0) and (nb_predators > 0) and (nb_apex_predators > 0) {
+       save ("cycle: "+ cycle + "; nbPreys: " + nb_preys
+            + "; minEnergyPreys: " + (prey min_of each.energy)
+            + "; maxSizePreys: " + (prey max_of each.energy) 
+            + "; nbPredators: " + nb_predators
+            + "; minEnergyPredators: " + (predator min_of each.energy)
+            + "; maxSizePredators: " + (predator max_of each.energy)
+            + "; nbApexPredators: " + nb_apex_predators
+            + "; minEnergyApexPredators: " + (apex_predator min_of each.energy)
+            + "; maxSizeApexPredators: " + (apex_predator max_of each.energy)) 
+        to: "results.txt" rewrite: (cycle = 0) ? true : false;
+    }
+
+    // --- Simulation Termination Reflex ---
+    reflex stop_simulation when: (
+        // Only Preys remain
+        (nb_preys > 0 and nb_predators = 0 and nb_apex_predators = 0) or
+        // Only Predators remain
+        (nb_predators > 0 and nb_preys = 0 and nb_apex_predators = 0) or
+        // Only Apex Predators remain
+        (nb_apex_predators > 0 and nb_preys = 0 and nb_predators = 0)
+    ) {
+        do pause;
+    } 
+}
+
+// --- Generic Species Class ---
+species generic_species {
+    // --- Physical Attributes ---
+    float size <- 1.0;
+    rgb color;
+    float max_energy;
+    float max_transfer;
+    float energy_consum;
+    float proba_reproduce;
+    int nb_max_offsprings;
+    float energy_reproduce;
+    image_file my_icon;
+    vegetation_cell my_cell <- one_of(vegetation_cell);
+    
+    // --- Dynamic Attributes ---
+    float energy <- rnd(max_energy * 0.5, max_energy) update: energy - energy_consum max: max_energy;
+    int age <- 0 update: age + 1;
+    int max_age;
+
+    // --- Health Attributes ---
+    string health_state <- "susceptible"; // Possible states: "susceptible", "infected", "recovered"
+    float susceptibility;
+    bool is_immune <- false;
+
+    init {
+        location <- my_cell.location;
+    }
+
+    // --- Movement ---
+    reflex basic_move {
+        my_cell <- choose_cell();
+        location <- my_cell.location;
+    }
+
+    // --- Eating ---
+    reflex eat {
+        energy <- energy + energy_from_eat();        
+    }
+
+    // --- Disease Progression ---
+    reflex disease_progression when: health_state = "infected" {
+        // Chance of dying from the disease
+        if (rnd(0.0, 1.0) < disease_mortality_rate) {
+            health_state <- "dead";
+            do die;
+        } else if (rnd(0.0, 1.0) < disease_recovery_rate) {
+            health_state <- "recovered";
+            is_immune <- true;
+        }
+    }
+
+    // --- Disease Transmission ---
+    reflex disease_transmission when: health_state = "infected" {
+        // Collect agents of all species in the same cell
+        list<generic_species> agents_in_cell <- (prey at_location my_cell.location)
+                                                + (predator at_location my_cell.location)
+                                                + (apex_predator at_location my_cell.location);
+        // Exclude self to prevent self-infection
+        agents_in_cell <- agents_in_cell where (each != self);
+        // Filter susceptible agents
+        list<generic_species> neighbors_to_infect <- agents_in_cell where (
+            (each.health_state = "susceptible") and
+            (rnd(0.0, 1.0) < (disease_transmission_rate * each.susceptibility))
+        );
+        // Infect the susceptible neighbors
+        ask neighbors_to_infect {
+            health_state <- "infected";
+        }
+    }
+
+    // --- Death ---
+    reflex die when: (energy <= 0) or (age >= max_age) or (health_state = "dead") {
+        do die;
+    }
+
+    // --- Reproduction ---
+    reflex reproduce when: (energy >= energy_reproduce) and (flip(proba_reproduce)) and (health_state != "infected") {
+        int nb_offsprings <- rnd(1, nb_max_offsprings);
+        create species(self) number: nb_offsprings {
+            my_cell <- myself.my_cell;
+            location <- my_cell.location;
+            energy <- myself.energy / nb_offsprings;
+            max_age <- myself.max_age; // Inherit max_age
+            // Inherit immunity with a chance
+            is_immune <- myself.is_immune and (rnd(0.0, 1.0) < 0.9); // 90% chance to inherit immunity
+            health_state <- is_immune ? "recovered" : "susceptible";
+            susceptibility <- myself.susceptibility; // Inherit susceptibility
+        }
+        energy <- energy / nb_offsprings;
+    }
+
+    // --- Eating Logic (to be overridden by child species) ---
+    float energy_from_eat {
+        return 0.0;
+    }
+
+    // --- Cell Selection Logic (to be overridden by child species) ---
+    vegetation_cell choose_cell {
+        return nil;
+    }
+
+    // --- Visualization ---
+    aspect icon {
+        draw my_icon size: 2 * size;
+        if (health_state = "infected") {
+            draw circle(size * 1.2) color: #red;
+        } else if (health_state = "recovered") {
+            draw circle(size * 1.2) color: #green;
+        }
+        else{
+        return 0;
+        }
+        
+    }
+}
+
+// --- Prey Species ---
+species prey parent: generic_species {
+    rgb color <- #blue;
+    float max_energy <- prey_max_energy;
+    float max_transfer <- prey_max_transfer;
+    float energy_consum <- prey_energy_consum;
+    float proba_reproduce <- prey_proba_reproduce;
+    int nb_max_offsprings <- prey_nb_max_offsprings;
+    float energy_reproduce <- prey_energy_reproduce;
+    image_file my_icon <- image_file("../includes/data/sheep.png");
+    int max_age <- rnd(50, 100);
+
+    // Initialize susceptibility with slight variation
+    susceptibility <- prey_susceptibility * rnd(0.8, 1.2);
+
+    // --- Eating Logic ---
+    float energy_from_eat {
+        float energy_transfer <- 0.0;
+        if(my_cell.food > 0) {
+            energy_transfer <- min([max_transfer, my_cell.food]);
+            my_cell.food <- my_cell.food - energy_transfer;
+        }         
+        return energy_transfer;
+    }
+
+    // --- Cell Selection Logic ---
+    vegetation_cell choose_cell {
+        return (my_cell.neighbors2) with_max_of (each.food);
+    }
+}
+
+// --- Predator Species ---
+species predator parent: generic_species {
+    rgb color <- #red;
+    float max_energy <- predator_max_energy;
+    float energy_transfer <- predator_energy_transfer;
+    float energy_consum <- predator_energy_consum;
+    float proba_reproduce <- predator_proba_reproduce;
+    int nb_max_offsprings <- predator_nb_max_offsprings;
+    float energy_reproduce <- predator_energy_reproduce;
+    image_file my_icon <- image_file("../includes/data/wolf.png");
+    int max_age <- rnd(80, 150);
+
+    // Initialize susceptibility with slight variation
+    susceptibility <- predator_susceptibility * rnd(0.8, 1.2);
+
+    // --- Eating Logic ---
+    float energy_from_eat {
+        list<prey> reachable_preys <- prey inside (my_cell);
+        if (!empty(reachable_preys)) {
+            ask one_of(reachable_preys) { do die; }
+            return energy_transfer;
+        }
+        return 0.0;
+    }
+
+    // --- Cell Selection Logic ---
+    vegetation_cell choose_cell {
+        vegetation_cell my_cell_tmp <- shuffle(my_cell.neighbors2) first_with (!(empty(prey inside (each))));
+        return my_cell_tmp != nil ? my_cell_tmp : one_of(my_cell.neighbors2);
+    }
+}
+
+// --- Apex Predator Species ---
+species apex_predator parent: generic_species {
+    rgb color <- #black;
+    float max_energy <- apex_predator_max_energy;
+    float energy_transfer <- apex_predator_energy_transfer;
+    float energy_consum <- apex_predator_energy_consum;
+    float proba_reproduce <- apex_predator_proba_reproduce;
+    int nb_max_offsprings <- apex_predator_nb_max_offsprings;
+    float energy_reproduce <- apex_predator_energy_reproduce;
+    image_file my_icon <- image_file("../includes/data/apex.png"); // Path to the uploaded icon
+    int max_age <- rnd(100, 200);
+
+    // Initialize susceptibility with slight variation
+    susceptibility <- apex_predator_susceptibility * rnd(0.8, 1.2);
+
+    float energy_gain_from_predator <- energy_transfer * 1.0;
+    float energy_gain_from_prey <- energy_transfer * 0.5;
+
+    // --- Eating Logic ---
+    float energy_from_eat {
+        // Check for nearby predators first
+        list<predator> reachable_predators <- predator inside (my_cell);
+        if (!empty(reachable_predators)) {
+            ask one_of(reachable_predators) { do die; }
+            return energy_gain_from_predator;
+        }
+        
+        // Check for nearby prey if no predators found
+        list<prey> reachable_preys <- prey inside (my_cell);
+        if (!empty(reachable_preys)) {
+            ask one_of(reachable_preys) { do die; }
+            return energy_gain_from_prey;
+        }
+        
+        return 0.0; // No energy if nothing to eat
+    }
+
+    // --- Cell Selection Logic ---
+    vegetation_cell choose_cell {
+        // Look for neighboring cells containing either predators or prey within a range of 1 to 5
+        list<vegetation_cell> cells_with_food <- (my_cell neighbors_at 5) where (
+                (not empty(prey inside (each))) or (not empty(predator inside (each)))
+            );
+        if (!empty(cells_with_food)) {
+            return one_of(cells_with_food);
+        }
+        // Default movement if no prey or predators found
+        return one_of(my_cell.neighbors2);
+    }
+}
+
+// --- Environment Grid ---
+grid vegetation_cell width: 50 height: 50 neighbors: 4 {
+    float max_food <- 1.0;
+    // Increase the food production rate to support a larger prey population.
+    float food_prod <- rnd(0.02,0.05); // Increased food production
+    float food <- rnd(1.0) max: max_food update: food + food_prod min: 0 max: max_food;
+    rgb color <- rgb(int(255 * (1 - food)), 255, int(255 * (1 - food))) update: rgb(int(255 * (1 - food)), 255, int(255 * (1 - food)));
+    list<vegetation_cell> neighbors2 <- (self neighbors_at 2);
+}
+
+// --- Experiment and Display ---
+experiment prey_predator_apex type: gui {
+    // --- Parameters for Prey ---
+    parameter "Initial number of preys: " var: nb_preys_init min: 0 max: 1000 category: "Prey";
+    parameter "Prey max energy: " var: prey_max_energy category: "Prey";
+    parameter "Prey max transfer: " var: prey_max_transfer category: "Prey";
+    parameter "Prey energy consumption: " var: prey_energy_consum category: "Prey";
+    parameter 'Prey probability reproduce: ' var: prey_proba_reproduce category: 'Prey';
+    parameter 'Prey nb max offsprings: ' var: prey_nb_max_offsprings category: 'Prey';
+    parameter 'Prey energy reproduce: ' var: prey_energy_reproduce category: 'Prey';
+
+    // --- Parameters for Predator ---
+    parameter "Initial number of predators: " var: nb_predators_init min: 0 max: 200 category: "Predator";
+    parameter "Predator max energy: " var: predator_max_energy category: "Predator";
+    parameter "Predator energy transfer: " var: predator_energy_transfer category: "Predator";
+    parameter "Predator energy consumption: " var: predator_energy_consum category: "Predator";
+    parameter 'Predator probability reproduce: ' var: predator_proba_reproduce category: 'Predator';
+    parameter 'Predator nb max offsprings: ' var: predator_nb_max_offsprings category: 'Predator';
+    parameter 'Predator energy reproduce: ' var: predator_energy_reproduce category: 'Predator';
+
+    // --- Parameters for Apex Predator ---
+    parameter "Initial number of apex predators: " var: nb_apex_predators_init min: 0 max: 50 category: "Apex Predator";
+    parameter "Apex Predator max energy: " var: apex_predator_max_energy category: "Apex Predator";
+    parameter "Apex Predator energy transfer: " var: apex_predator_energy_transfer category: "Apex Predator";
+    parameter "Apex Predator energy consumption: " var: apex_predator_energy_consum category: "Apex Predator";
+    parameter 'Apex Predator probability reproduce: ' var: apex_predator_proba_reproduce category: 'Apex Predator';
+    parameter 'Apex Predator nb max offsprings: ' var: apex_predator_nb_max_offsprings category: 'Apex Predator';
+    parameter 'Apex Predator energy reproduce: ' var: apex_predator_energy_reproduce category: 'Apex Predator';
+
+    // --- Parameters for Disease ---
+    parameter "Disease Transmission Rate: " var: disease_transmission_rate min: 0.0 max: 1.0 category: "Disease";
+    parameter "Disease Mortality Rate: " var: disease_mortality_rate min: 0.0 max: 1.0 category: "Disease";
+    parameter "Disease Recovery Rate: " var: disease_recovery_rate min: 0.0 max: 1.0 category: "Disease";
+    parameter "Initial Infection Rate: " var: initial_infection_rate min: 0.0 max: 1.0 category: "Disease";
+
+    // --- Susceptibility Parameters ---
+    parameter "Prey Susceptibility: " var: prey_susceptibility min: 0.0 max: 2.0 category: "Disease";
+    parameter "Predator Susceptibility: " var: predator_susceptibility min: 0.0 max: 2.0 category: "Disease";
+    parameter "Apex Predator Susceptibility: " var: apex_predator_susceptibility min: 0.0 max: 2.0 category: "Disease";
+
+  output {
+        // --- Main Display ---
+        display main_display type: 2d antialias: false {
+            grid vegetation_cell border: #black;
+            species prey aspect: icon;
+            species predator aspect: icon;
+            species apex_predator aspect: icon;
+        }
+        
+        // --- Population Information Display ---
+        display Population_information refresh: every(5#cycles) type: 2d {
+            chart "Species Evolution" type: series size: {1, 0.5} position: {0, 0} {
+                data "Number of Preys" value: nb_preys color: #blue;
+                data "Number of Predators" value: nb_predators color: #red;
+                data "Number of Apex Predators" value: nb_apex_predators color: #black;
+            }
+            
+            chart "Prey Energy Distribution" type: histogram background: #lightgray size: {0.5, 0.5} position: {0, 0.5} {
+                data "]0;0.25]" value: prey count (each.energy <= 0.25) color: #blue;
+                data "]0.25;0.5]" value: prey count ((each.energy > 0.25) and (each.energy <= 0.5)) color: #blue;
+                data "]0.5;0.75]" value: prey count ((each.energy > 0.5) and (each.energy <= 0.75)) color: #blue;
+                data "]0.75;1]" value: prey count (each.energy > 0.75) color: #blue;
+            }
+            
+            chart "Predator Energy Distribution" type: histogram background: #lightgray size: {0.5, 0.5} position: {0.5, 0.5} {
+                data "]0;0.25]" value: predator count (each.energy <= 0.25) color: #red;
+                data "]0.25;0.5]" value: predator count ((each.energy > 0.25) and (each.energy <= 0.5)) color: #red;
+                data "]0.5;0.75]" value: predator count ((each.energy > 0.5) and (each.energy <= 0.75)) color: #red;
+                data "]0.75;1]" value: predator count (each.energy > 0.75) color: #red;
+            }
+        }
+
+        // --- Disease Information Display ---
+        display Disease_information refresh: every(5#cycles) type: 2d {
+            chart "Infected Population Over Time" type: series {
+                data "Infected Preys" value: nb_infected_preys color: #blue;
+                data "Infected Predators" value: nb_infected_predators color: #red;
+                data "Infected Apex Predators" value: nb_infected_apex_predators color: #black;
+            }
+        }
+
+        // --- Monitors ---
+        monitor "Number of Preys" value: nb_preys;
+        monitor "Number of Predators" value: nb_predators;
+        monitor "Number of Apex Predators" value: nb_apex_predators;
+
+        monitor "Number of Infected Preys" value: nb_infected_preys;
+        monitor "Number of Infected Predators" value: nb_infected_predators;
+        monitor "Number of Infected Apex Predators" value: nb_infected_apex_predators;
+    }
+}

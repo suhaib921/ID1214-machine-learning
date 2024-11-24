@@ -5,9 +5,6 @@ def main():
     print("Welcome to the Children's Disease Expert System.")
     print("Please answer the following questions with 'yes' or 'no'.")
     
-    # Instantiate the expert system
-    engine = ChildDiseaseExpert()
-    engine.reset()
 
     # Symptom questions with input validation
     symptoms = {}
@@ -31,13 +28,13 @@ def main():
                 break
             print("Please answer with 'yes' or 'no'.")
 
-    # Declare symptoms in the engine
-    for symptom, present in symptoms.items():
-        if present:
-            engine.declare(Symptom(name=symptom))
-    
-    # Run the engine
-    engine.run()
+     # Filter only symptoms marked as 'yes'
+    present_symptoms = [symptom for symptom, present in symptoms.items() if present]
+
+    # Evaluate rules with two-symptom combinations
+    expert = ChildDiseaseExpert()
+    expert.evaluate_two_symptom_matches(present_symptoms)
+    expert.print_possible_diagnoses()
 
 if __name__ == "__main__":
     main()
